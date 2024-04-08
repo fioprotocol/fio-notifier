@@ -30,12 +30,15 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
         }
         const jsonData = JSON.parse(data.Body.toString());
 
+        console.log(`S3 active flag: ${jsonData.active}`);
+
         // Check if the last Lambda function is still running
         if (jsonData.active) {
+            console.log('Lambda function still running, exiting.');
             return {
                 statusCode: 200,
                 body: JSON.stringify({
-                    message: 'Lambda function is still running, exiting.',
+                    message: 'Lambda function still running, exiting.',
                 }),
             };
         }
@@ -49,6 +52,7 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
         }).promise();
         let lastBlock = jsonData.last_block;
         let lastIrreversibleBlock = 0;
+        console.log('Staring processing at block '+(lastBlock+1));
 
         // Make the initial API call to get the last irreversible block
         const initialResponse = await axios.post(`${apiUrl}/v1/history/get_block_txids`, {
@@ -87,10 +91,7 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
                         }
                     }
                 }
-            } else {
-                console.log('No transactions in block: ' + (lastBlock + 1));
             }
-
             lastBlock++;
         }
 
@@ -113,6 +114,8 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
             Key: 'data.json',
             Body: JSON.stringify(jsonData),
         }).promise();
+
+        console.log('Processing completed at block '+lastBlock);
 
         return {
             statusCode: 200,
