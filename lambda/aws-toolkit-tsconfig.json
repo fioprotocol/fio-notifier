@@ -1,0 +1,12 @@
+{
+  "compilerOptions" : {
+    "target" : "es6",
+    "module" : "commonjs",
+    "sourceMap" : true,
+    "outDir" : "C:\\Users\\pawel\\pmode\\fio-notif\\lambda\\aws-toolkit-ts-output",
+    "rootDir" : ".",
+    "sourceRoot" : "C:\\Users\\pawel\\pmode\\fio-notif\\lambda",
+    "typeRoots" : [ "C:\\Users\\pawel\\pmode\\fio-notif\\lambda\\node_modules\\@types" ],
+    "types" : [ "node" ]
+  }
+}
