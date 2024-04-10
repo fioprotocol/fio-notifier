@@ -85,7 +85,7 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
                             trace.act.account === 'fio.address' &&
                             trace.act.name === 'regdomain'
                         ) {
-                            registeredFioDomains.push(trace.act.data.fio_address);
+                            registeredFioDomains.push(trace.act.data.fio_domain);
                         } else if (trace.act.account === 'fio.address' && trace.act.name === 'burndomain') {
                             burnedFioDomains.push(trace.act.data.domainname);
                         }
