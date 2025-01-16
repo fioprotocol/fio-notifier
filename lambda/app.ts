@@ -37,6 +37,11 @@ interface DeltaResponse {
     deltas: Delta[];
 }
 
+// Helper function to safely update the last block number
+const safeUpdateLastBlock = (currentLastBlock: number, newLastBlock: number): number => {
+    return Math.max(currentLastBlock, newLastBlock);
+};
+
 export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     try {
         if (!bucketName || !apiUrl || !discordWebhookUrl) {
@@ -56,6 +61,7 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
         const jsonData = JSON.parse(data.Body.toString());
 
         console.log(`S3 active flag: ${jsonData.active}`);
+        console.log(`Current last_block: ${jsonData.last_block}`);
 
         if (jsonData.active) {
             console.log('Lambda function still running, exiting.');
@@ -100,12 +106,13 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
                 burnedFioDomains[delta.data.name] = true;
             }
 
-            lastBlock = Math.max(lastBlock, delta.block_num);
+            // Safely update lastBlock
+            lastBlock = safeUpdateLastBlock(lastBlock, delta.block_num);
         }
 
-        // If no new deltas were found, update lastBlock to last_indexed_block
+        // If no new deltas were found, safely update lastBlock to last_indexed_block
         if (response.data.deltas.length === 0) {
-            lastBlock = response.data.last_indexed_block;
+            lastBlock = safeUpdateLastBlock(lastBlock, response.data.last_indexed_block);
         }
 
         // Send notifications to Discord webhook
@@ -115,12 +122,13 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
         }
 
         if (Object.keys(registeredFioDomains).length > 0) {
-            const message = `The following FIO Domains were recently registered/renewed: ${Object.keys(registeredFioDomains).join(', ')}`;
+            const message = `The following FIO Domains were recently registered/renewed/transferred/wrapped: ${Object.keys(registeredFioDomains).join(', ')}`;
             await axios.post(discordWebhookUrl, { content: message });
         }
 
         // Update data.json in S3 with the new last_block value
-        jsonData.last_block = lastBlock;
+        // One final safety check before saving
+        jsonData.last_block = safeUpdateLastBlock(jsonData.last_block, lastBlock);
         jsonData.active = false;
         await s3.putObject({
             Bucket: bucketName,
@@ -141,21 +149,25 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
         console.log(err);
 
         if (bucketName) {
-            // Set the active flag back to false in case of an error
-            const params: AWS.S3.GetObjectRequest = {
-                Bucket: bucketName,
-                Key: 'data.json',
-            };
-            const data = await s3.getObject(params).promise();
-
-            if (data.Body) {
-                const jsonData = JSON.parse(data.Body.toString());
-                jsonData.active = false;
-                await s3.putObject({
+            try {
+                // Set the active flag back to false in case of an error
+                const params: AWS.S3.GetObjectRequest = {
                     Bucket: bucketName,
                     Key: 'data.json',
-                    Body: JSON.stringify(jsonData),
-                }).promise();
+                };
+                const data = await s3.getObject(params).promise();
+
+                if (data.Body) {
+                    const jsonData = JSON.parse(data.Body.toString());
+                    jsonData.active = false;
+                    await s3.putObject({
+                        Bucket: bucketName,
+                        Key: 'data.json',
+                        Body: JSON.stringify(jsonData),
+                    }).promise();
+                }
+            } catch (s3Error) {
+                console.log('Error resetting active flag:', s3Error);
             }
         }
 
