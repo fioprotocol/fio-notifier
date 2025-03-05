@@ -37,11 +37,6 @@ interface DeltaResponse {
     deltas: Delta[];
 }
 
-// Helper function to safely update the last block number
-const safeUpdateLastBlock = (currentLastBlock: number, newLastBlock: number): number => {
-    return Math.max(currentLastBlock, newLastBlock);
-};
-
 export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     try {
         if (!bucketName || !apiUrl || !discordWebhookUrl) {
@@ -83,52 +78,59 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
 
         let lastBlock = jsonData.last_block + 1;
         console.log('Starting processing at block ' + lastBlock);
+        let updated = false;
 
-        // Get domains table deltas
-        const response = await axios.get<DeltaResponse>(`${apiUrl}/v2/history/get_deltas`, {
-            params: {
-                code: 'fio.address',
-                scope: 'fio.address',
-                table: 'domains',
-                sort: 'asc',
-                after: lastBlock
+        try {
+            // Get domains table deltas
+            const response = await axios.get<DeltaResponse>(`${apiUrl}/v2/history/get_deltas`, {
+                params: {
+                    code: 'fio.address',
+                    scope: 'fio.address',
+                    table: 'domains',
+                    sort: 'asc',
+                    after: lastBlock
+                }
+            });
+
+            // Check if last_indexed_block is valid and higher than our current block
+            if (typeof response.data.last_indexed_block === 'number' &&
+                !isNaN(response.data.last_indexed_block) &&
+                response.data.last_indexed_block >= lastBlock - 1) {
+
+                jsonData.last_block = response.data.last_indexed_block;
+                updated = true;
+
+                // Look for registrations and burns
+                const registeredFioDomains: { [key: string]: boolean } = {};
+                const burnedFioDomains: { [key: string]: boolean } = {};
+
+                for (const delta of response.data.deltas) {
+                    if (delta.present === 1) {
+                        registeredFioDomains[delta.data.name] = true;
+                    } else if (delta.present === 0) {
+                        burnedFioDomains[delta.data.name] = true;
+                    }
+                }
+
+                // Send notifications to Discord webhook
+                if (Object.keys(burnedFioDomains).length > 0) {
+                    const message = `The following FIO Domains were recently burned: ${Object.keys(burnedFioDomains).join(', ')}`;
+                    await axios.post(discordWebhookUrl, { content: message });
+                }
+
+                if (Object.keys(registeredFioDomains).length > 0) {
+                    const message = `The following FIO Domains were recently registered/renewed/transferred/wrapped: ${Object.keys(registeredFioDomains).join(', ')}`;
+                    await axios.post(discordWebhookUrl, { content: message });
+                }
+            } else {
+                console.log(`Invalid or not-higher last_indexed_block: ${response.data.last_indexed_block}, current: ${jsonData.last_block}`);
             }
-        });
-
-        // Look for registrations and burns
-        const registeredFioDomains: { [key: string]: boolean } = {};
-        const burnedFioDomains: { [key: string]: boolean } = {};
-
-        for (const delta of response.data.deltas) {
-            if (delta.present === 1) {
-                registeredFioDomains[delta.data.name] = true;
-            } else if (delta.present === 0) {
-                burnedFioDomains[delta.data.name] = true;
-            }
-
-            // Safely update lastBlock
-            lastBlock = safeUpdateLastBlock(lastBlock, delta.block_num);
+        } catch (apiError) {
+            console.log('Error during API processing:', apiError);
+            console.log('Not updating last_block due to error');
         }
 
-        // If no new deltas were found, safely update lastBlock to last_indexed_block
-        if (response.data.deltas.length === 0) {
-            lastBlock = safeUpdateLastBlock(lastBlock, response.data.last_indexed_block);
-        }
-
-        // Send notifications to Discord webhook
-        if (Object.keys(burnedFioDomains).length > 0) {
-            const message = `The following FIO Domains were recently burned: ${Object.keys(burnedFioDomains).join(', ')}`;
-            await axios.post(discordWebhookUrl, { content: message });
-        }
-
-        if (Object.keys(registeredFioDomains).length > 0) {
-            const message = `The following FIO Domains were recently registered/renewed/transferred/wrapped: ${Object.keys(registeredFioDomains).join(', ')}`;
-            await axios.post(discordWebhookUrl, { content: message });
-        }
-
-        // Update data.json in S3 with the new last_block value
-        // One final safety check before saving
-        jsonData.last_block = safeUpdateLastBlock(jsonData.last_block, lastBlock);
+        // Always reset active flag before saving
         jsonData.active = false;
         await s3.putObject({
             Bucket: bucketName,
@@ -136,13 +138,14 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
             Body: JSON.stringify(jsonData),
         }).promise();
 
-        console.log('Processing completed at block ' + lastBlock);
+        console.log('Processing completed. last_block is now: ' + jsonData.last_block + (updated ? ' (updated)' : ' (unchanged)'));
 
         return {
             statusCode: 200,
             body: JSON.stringify({
                 message: 'Run complete.',
                 last_block: lastBlock,
+                updated: updated
             }),
         };
     } catch (err) {

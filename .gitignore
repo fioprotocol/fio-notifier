@@ -209,3 +209,5 @@ $RECYCLE.BIN/
 
 *.js
 /.idea
+/package-lock.json
+/lambda/aws-toolkit-ts-output/
